@@ -1,0 +1,346 @@
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+use App\Models\Customer;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Validator;
+
+class CustomerController extends Controller
+{
+    /**
+     * Get all customers with filters
+     *
+     * Filters: search, type, is_active
+     */
+    public function index(Request $request)
+    {
+        $query = Customer::query();
+
+        // Search by name, email, or phone
+        if ($request->has('search')) {
+            $query->search($request->search);
+        }
+
+        // Filter by type (regular, vip)
+        if ($request->has('type')) {
+            $query->where('type', $request->type);
+        }
+
+        // Filter by active status
+        if ($request->has('is_active')) {
+            $query->where('is_active', $request->is_active);
+        }
+
+        // Sort by newest first
+        $query->orderBy('created_at', 'desc');
+
+        $perPage = $request->get('per_page', 15);
+        $customers = $query->paginate($perPage);
+
+        return response()->json([
+            'success' => true,
+            'data' => $customers
+        ]);
+    }
+
+    /**
+     * Get single customer with sales history
+     */
+    public function show($id)
+    {
+        $customer = Customer::with(['sales' => function($query) {
+            $query->orderBy('created_at', 'desc')->limit(10);
+        }])->find($id);
+
+        if (!$customer) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Customer not found'
+            ], 404);
+        }
+
+        // Calculate statistics
+        $stats = [
+            'total_purchases' => $customer->sales()->where('status', 'completed')->count(),
+            'total_spent' => $customer->sales()->where('status', 'completed')->sum('total_amount'),
+            'available_credit' => $customer->available_credit,
+            'loyalty_points' => $customer->loyalty_points
+        ];
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'customer' => $customer,
+                'statistics' => $stats
+            ]
+        ]);
+    }
+
+    /**
+     * Create new customer
+     */
+    public function store(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'name' => 'required|string|max:255',
+            'email' => 'nullable|email|unique:customers,email',
+            'phone' => 'nullable|string|max:20',
+            'address' => 'nullable|string',
+            'type' => 'nullable|in:regular,vip',
+            'credit_limit' => 'nullable|numeric|min:0',
+            'is_active' => 'nullable|boolean'
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        try {
+            $customer = Customer::create($request->all());
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Customer created successfully',
+                'data' => $customer
+            ], 201);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to create customer',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Update customer
+     */
+    public function update(Request $request, $id)
+    {
+        $customer = Customer::find($id);
+
+        if (!$customer) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Customer not found'
+            ], 404);
+        }
+
+        $validator = Validator::make($request->all(), [
+            'name' => 'sometimes|required|string|max:255',
+            'email' => 'nullable|email|unique:customers,email,' . $id,
+            'phone' => 'nullable|string|max:20',
+            'address' => 'nullable|string',
+            'type' => 'nullable|in:regular,vip',
+            'credit_limit' => 'nullable|numeric|min:0',
+            'is_active' => 'nullable|boolean'
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        try {
+            $customer->update($request->all());
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Customer updated successfully',
+                'data' => $customer
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to update customer',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Delete customer
+     */
+    public function destroy($id)
+    {
+        $customer = Customer::find($id);
+
+        if (!$customer) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Customer not found'
+            ], 404);
+        }
+
+        // Check if customer has sales
+        if ($customer->sales()->count() > 0) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Cannot delete customer with existing sales. Deactivate instead.'
+            ], 400);
+        }
+
+        try {
+            $customer->delete();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Customer deleted successfully'
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to delete customer',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Get customer's purchase history
+     */
+    public function purchaseHistory($id, Request $request)
+    {
+        $customer = Customer::find($id);
+
+        if (!$customer) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Customer not found'
+            ], 404);
+        }
+
+        $query = $customer->sales()->with(['items.product', 'payments']);
+
+        // Filter by date range
+        if ($request->has('start_date')) {
+            $query->whereDate('created_at', '>=', $request->start_date);
+        }
+
+        if ($request->has('end_date')) {
+            $query->whereDate('created_at', '<=', $request->end_date);
+        }
+
+        // Filter by status
+        if ($request->has('status')) {
+            $query->where('status', $request->status);
+        }
+
+        $query->orderBy('created_at', 'desc');
+
+        $perPage = $request->get('per_page', 15);
+        $sales = $query->paginate($perPage);
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'customer' => [
+                    'id' => $customer->id,
+                    'name' => $customer->name,
+                    'type' => $customer->type
+                ],
+                'sales' => $sales
+            ]
+        ]);
+    }
+
+    /**
+     * Manage loyalty points
+     */
+    public function manageLoyaltyPoints(Request $request, $id)
+    {
+        // Only admin can manage points
+        if (!auth()->user()->isAdmin()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized. Only admins can manage loyalty points.'
+            ], 403);
+        }
+
+        $customer = Customer::find($id);
+
+        if (!$customer) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Customer not found'
+            ], 404);
+        }
+
+        $validator = Validator::make($request->all(), [
+            'action' => 'required|in:add,deduct',
+            'points' => 'required|integer|min:1',
+            'reason' => 'required|string|max:255'
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        try {
+            $oldPoints = $customer->loyalty_points;
+
+            if ($request->action === 'add') {
+                $customer->addLoyaltyPoints($request->points);
+                $message = "Added {$request->points} loyalty points";
+            } else {
+                if (!$customer->deductLoyaltyPoints($request->points)) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Insufficient loyalty points'
+                    ], 400);
+                }
+                $message = "Deducted {$request->points} loyalty points";
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => $message,
+                'data' => [
+                    'old_points' => $oldPoints,
+                    'new_points' => $customer->loyalty_points,
+                    'reason' => $request->reason
+                ]
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to manage loyalty points',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Get VIP customers
+     */
+    public function vipCustomers()
+    {
+        $customers = Customer::vip()
+            ->active()
+            ->withCount('sales')
+            ->orderBy('sales_count', 'desc')
+            ->get();
+
+        return response()->json([
+            'success' => true,
+            'data' => $customers
+        ]);
+    }
+}
