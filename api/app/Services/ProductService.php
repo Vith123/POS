@@ -25,12 +25,24 @@ class ProductService
             $query->where('category_id', $filters['category_id']);
         }
 
-        if (isset($filters['is_active'])) {
-            // Convert string 'true'/'false' to boolean
+        if (isset($filters['is_active']) && $filters['is_active'] !== '' && $filters['is_active'] !== null) {
             $isActive = filter_var($filters['is_active'], FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
             if ($isActive !== null) {
                 $query->where('is_active', $isActive);
             }
+        }
+
+        if (($filters['stock'] ?? null) === 'low') {
+            $query->whereHas('inventory', function ($inventory) {
+                $inventory->whereColumn('quantity', '<=', 'min_stock_level')
+                    ->where('quantity', '>', 0);
+            });
+        }
+
+        if (($filters['stock'] ?? null) === 'out') {
+            $query->whereHas('inventory', function ($inventory) {
+                $inventory->where('quantity', '<=', 0);
+            });
         }
 
         return $query->latest()->paginate($perPage);
@@ -81,16 +93,15 @@ class ProductService
                 'description' => $data['description'] ?? null,
                 'barcode' => $data['barcode'] ?? null,
                 'sku' => $data['sku'],
-                'cost_price' => $data['cost_price'],
-                'selling_price' => $data['selling_price'],
+                'cost_price' => $data['cost'] ?? 0,
+                'selling_price' => $data['price'],
                 'image' => $data['image'] ?? null,
                 'is_active' => $data['is_active'] ?? true,
             ]);
 
-            // Create inventory record
             Inventory::create([
                 'product_id' => $product->id,
-                'quantity' => $data['initial_quantity'] ?? 0,
+                'quantity' => $data['stock_quantity'] ?? 0,
                 'min_stock_level' => $data['min_stock_level'] ?? 10,
             ]);
 
@@ -112,17 +123,42 @@ class ProductService
             }
         }
 
-        $product->update(array_filter([
-            'category_id' => $data['category_id'] ?? null,
-            'name' => $data['name'] ?? null,
-            'description' => $data['description'] ?? null,
-            'barcode' => $data['barcode'] ?? null,
-            'sku' => $data['sku'] ?? null,
-            'cost_price' => $data['cost_price'] ?? null,
-            'selling_price' => $data['selling_price'] ?? null,
-            'image' => $data['image'] ?? null,
-            'is_active' => isset($data['is_active']) ? $data['is_active'] : null,
-        ], fn($value) => $value !== null));
+        $attributes = [];
+
+        foreach ([
+            'category_id' => 'category_id',
+            'name' => 'name',
+            'description' => 'description',
+            'barcode' => 'barcode',
+            'sku' => 'sku',
+            'cost' => 'cost_price',
+            'price' => 'selling_price',
+            'image' => 'image',
+            'is_active' => 'is_active',
+        ] as $input => $column) {
+            if (array_key_exists($input, $data)) {
+                $attributes[$column] = $data[$input];
+            }
+        }
+
+        if ($attributes !== []) {
+            $product->update($attributes);
+        }
+
+        $inventoryAttributes = [];
+        if (array_key_exists('stock_quantity', $data)) {
+            $inventoryAttributes['quantity'] = $data['stock_quantity'];
+        }
+        if (array_key_exists('min_stock_level', $data) && $data['min_stock_level'] !== null) {
+            $inventoryAttributes['min_stock_level'] = $data['min_stock_level'];
+        }
+
+        if ($inventoryAttributes !== []) {
+            $product->inventory()->updateOrCreate(
+                ['product_id' => $product->id],
+                $inventoryAttributes
+            );
+        }
 
         return $product->fresh(['category', 'inventory']);
     }

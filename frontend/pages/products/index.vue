@@ -88,9 +88,13 @@
         </span>
       </template>
 
+      <template #cell-category="{ row }">
+        {{ row.category?.name || '—' }}
+      </template>
+
       <!-- Price Column -->
       <template #cell-price="{ row }">
-        ${{ row.price.toFixed(2) }}
+        ${{ Number(row.price || 0).toFixed(2) }}
       </template>
 
       <!-- Status Column -->
@@ -346,6 +350,15 @@ const columns: TableColumn[] = [
   { key: 'is_active', label: 'Status' },
 ]
 
+const validationMessage = (error: any, fallback: string) => {
+  const errors = error?.data?.errors
+  if (errors) {
+    const first = Object.values(errors).flat()[0]
+    if (typeof first === 'string') return first
+  }
+  return error?.data?.message || fallback
+}
+
 // Get stock badge class
 const getStockBadgeClass = (product: Product) => {
   if (product.stock_quantity === 0) {
@@ -365,6 +378,7 @@ const fetchProducts = async () => {
     if (filters.search) params.search = filters.search
     if (filters.category) params.category_id = filters.category
     if (filters.status) params.is_active = filters.status === 'active'
+    if (filters.stock) params.stock = filters.stock
     
     const response = await api.products.getAll(params)
     // Laravel returns paginated data: { data: [...], links: {...}, meta: {...} }
@@ -460,8 +474,14 @@ const saveProduct = async () => {
 
     // Create FormData for file upload
     const formData = new FormData()
-    Object.keys(form).forEach(key => {
-      formData.append(key, form[key as keyof typeof form].toString())
+    ;(Object.keys(form) as Array<keyof typeof form>).forEach(key => {
+      const value = form[key]
+      if (key === 'is_active') {
+        formData.append(key, value ? '1' : '0')
+        return
+      }
+      if (value === '' || value === null || value === undefined) return
+      formData.append(key, String(value))
     })
 
     if (imageFile.value) {
@@ -481,7 +501,7 @@ const saveProduct = async () => {
     closeModal()
     fetchProducts()
   } catch (error: any) {
-    notificationStore.error('Error', error?.data?.message || 'Failed to save product')
+    notificationStore.error('Error', validationMessage(error, 'Failed to save product'))
   } finally {
     saving.value = false
   }
