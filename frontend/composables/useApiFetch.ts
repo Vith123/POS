@@ -23,7 +23,7 @@ export const useApiFetch = <T>(url: string, options: any = {}) => {
   const defaultOptions = {
     baseURL: config.public.apiBase,
     headers: {
-      'Accept': 'ap && authStoreplication/json',
+      'Accept': 'application/json',
       ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
     },
     // Add authentication token if user is logged in
