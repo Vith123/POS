@@ -14,34 +14,48 @@ class ProductRequest extends FormRequest
         return true; // Authorization handled by policy
     }
 
+    protected function prepareForValidation(): void
+    {
+        $merge = [];
+
+        if ($this->exists('is_active')) {
+            $merge['is_active'] = filter_var($this->input('is_active'), FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+        }
+
+        if ($this->input('barcode') === '') {
+            $merge['barcode'] = null;
+        }
+
+        if ($this->input('description') === '') {
+            $merge['description'] = null;
+        }
+
+        if ($merge !== []) {
+            $this->merge($merge);
+        }
+    }
+
     /**
-     * Get the validation rules that apply to the request.
-     *
      * @return array<string, \Illuminate\Contracts\Validation\ValidationRule|array<mixed>|string>
      */
     public function rules(): array
     {
         $productId = $this->route('id');
-        $rules = [
-            'category_id' => 'required|exists:categories,id',
-            'name' => 'required|string|max:255',
-            'description' => 'nullable|string|max:1000',
-            'sku' => 'required|string|max:100|unique:products,sku,' . $productId,
-            'barcode' => 'nullable|string|max:100|unique:products,barcode,' . $productId,
-            'price' => 'required|numeric|min:0',
-            'cost' => 'nullable|numeric|min:0',
-            'image' => $this->isMethod('post') ? 'nullable|image|mimes:jpeg,png,jpg,gif|max:2048' : 'nullable|string',
-            'is_active' => 'nullable|boolean',
+        $isUpdate = $productId !== null;
+
+        return [
+            'category_id' => [$isUpdate ? 'sometimes' : 'required', 'integer', 'exists:categories,id'],
+            'name' => [$isUpdate ? 'sometimes' : 'required', 'string', 'max:255'],
+            'description' => ['nullable', 'string', 'max:1000'],
+            'sku' => [$isUpdate ? 'sometimes' : 'required', 'string', 'max:100', 'unique:products,sku,' . $productId],
+            'barcode' => ['nullable', 'string', 'max:100', 'unique:products,barcode,' . $productId],
+            'price' => [$isUpdate ? 'sometimes' : 'required', 'numeric', 'min:0'],
+            'cost' => ['nullable', 'numeric', 'min:0'],
+            'image' => ['nullable', 'image', 'mimes:jpeg,png,jpg,gif,webp', 'max:2048'],
+            'is_active' => ['nullable', 'boolean'],
+            'stock_quantity' => [$isUpdate ? 'sometimes' : 'required', 'integer', 'min:0'],
+            'min_stock_level' => ['nullable', 'integer', 'min:0'],
         ];
-
-        // Additional rules for creation
-        if ($this->isMethod('post')) {
-            $rules['initial_stock'] = 'required|integer|min:0';
-            $rules['min_stock'] = 'nullable|integer|min:0';
-            $rules['max_stock'] = 'nullable|integer|min:0';
-        }
-
-        return $rules;
     }
 
     /**
@@ -56,9 +70,8 @@ class ProductRequest extends FormRequest
             'barcode' => 'barcode',
             'price' => 'selling price',
             'cost' => 'cost price',
-            'initial_stock' => 'initial stock quantity',
-            'min_stock' => 'minimum stock level',
-            'max_stock' => 'maximum stock level',
+            'stock_quantity' => 'stock quantity',
+            'min_stock_level' => 'minimum stock level',
         ];
     }
 
@@ -76,7 +89,7 @@ class ProductRequest extends FormRequest
             'barcode.unique' => 'This barcode already exists.',
             'price.required' => 'The selling price is required.',
             'price.min' => 'The price must be a positive value.',
-            'initial_stock.required' => 'The initial stock quantity is required.',
+            'stock_quantity.required' => 'The stock quantity is required.',
         ];
     }
 }

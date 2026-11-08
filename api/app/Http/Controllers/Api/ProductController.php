@@ -30,6 +30,7 @@ class ProductController extends Controller
             'search' => $request->search,
             'category_id' => $request->category_id,
             'is_active' => $request->is_active,
+            'stock' => $request->stock,
             'with_inventory' => $request->boolean('with_inventory'),
         ];
 
@@ -40,8 +41,6 @@ class ProductController extends Controller
 
     public function show(int $id): JsonResponse
     {
-        $this->authorize('view', Product::class);
-
         $product = $this->productService->getById($id);
 
         if (!$product) {
@@ -51,6 +50,8 @@ class ProductController extends Controller
             ], 404);
         }
 
+        $this->authorize('view', $product);
+
         return (new ProductResource($product))->response();
     }
 
@@ -59,7 +60,7 @@ class ProductController extends Controller
         $this->authorize('create', Product::class);
 
         try {
-            $product = $this->productService->create($request->validated());
+            $product = $this->productService->create($this->productPayload($request));
 
             return (new ProductResource($product))
                 ->response()
@@ -79,7 +80,7 @@ class ProductController extends Controller
         $this->authorize('update', $product);
 
         try {
-            $updated = $this->productService->update($id, $request->validated());
+            $updated = $this->productService->update($id, $this->productPayload($request));
 
             return (new ProductResource($updated))->response();
         } catch (\Exception $e) {
@@ -135,5 +136,21 @@ class ProductController extends Controller
             'count' => $products->count(),
             'data' => ProductResource::collection($products),
         ]);
+    }
+
+    /**
+     * Validated fields plus a stored image path when a file was uploaded.
+     */
+    private function productPayload(ProductRequest $request): array
+    {
+        $data = $request->validated();
+
+        if ($request->hasFile('image')) {
+            $data['image'] = $this->productService->uploadImage($request->file('image'));
+        } else {
+            unset($data['image']);
+        }
+
+        return $data;
     }
 }
